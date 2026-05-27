@@ -1,0 +1,57 @@
+name: mec-breakout-agent
+
+x-agent-common: &agent-common
+  build: .
+  image: mec-breakout-agent:latest
+  restart: unless-stopped
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+  environment:
+    PORTAL_BASE_URL: ${PORTAL_BASE_URL:-https://back-6gbricks.dedyn.io}
+    AGENT_TOKEN: ${AGENT_TOKEN:-}
+    POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-2}
+    TELEMETRY_ENABLED: ${TELEMETRY_ENABLED:-true}
+    N9_CIDR: ${N9_CIDR:-172.32.0.0/24}
+    N6_CIDR: ${N6_CIDR:-172.33.0.0/24}
+    TRAFFIC_URL: ${TRAFFIC_URL:-}
+
+services:
+  mec-agent-cn:
+    <<: *agent-common
+    container_name: mec-breakout-agent-cn
+    profiles:
+      - upf-cn
+    environment:
+      PORTAL_BASE_URL: ${PORTAL_BASE_URL:-https://back-6gbricks.dedyn.io}
+      AGENT_TOKEN: ${AGENT_TOKEN:-}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-2}
+      TELEMETRY_ENABLED: ${TELEMETRY_ENABLED:-true}
+      N9_CIDR: ${N9_CIDR:-172.32.0.0/24}
+      N6_CIDR: ${N6_CIDR:-172.33.0.0/24}
+      TRAFFIC_URL: ${TRAFFIC_URL:-}
+      AGENT_ROLE: controller
+      NODE_NAME: ${NODE_NAME:-upf-cn}
+      LOCAL_UPF_CONTAINER: ${LOCAL_UPF_CONTAINER:-oai-upf}
+      FLOW_CONTROLLER_URL: ${FLOW_CONTROLLER_URL:-http://192.168.0.1:9090}
+      FLOW_DIRECT_PATH: ${FLOW_DIRECT_PATH:-/flow/all/direct}
+      FLOW_CHAIN_PATH: ${FLOW_CHAIN_PATH:-/flow/all/chain}
+      CENTRAL_DN_LATENCY_TARGET: ${CENTRAL_DN_LATENCY_TARGET:-}
+
+  mec-agent-edge:
+    <<: *agent-common
+    container_name: mec-breakout-agent-edge
+    profiles:
+      - upf-e
+    environment:
+      PORTAL_BASE_URL: ${PORTAL_BASE_URL:-https://back-6gbricks.dedyn.io}
+      AGENT_TOKEN: ${AGENT_TOKEN:-}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-2}
+      TELEMETRY_ENABLED: ${TELEMETRY_ENABLED:-true}
+      N9_CIDR: ${N9_CIDR:-172.32.0.0/24}
+      N6_CIDR: ${N6_CIDR:-172.33.0.0/24}
+      TRAFFIC_URL: ${TRAFFIC_URL:-}
+      AGENT_ROLE: telemetry
+      NODE_NAME: ${NODE_NAME:-upf-e}
+      LOCAL_UPF_CONTAINER: ${LOCAL_UPF_CONTAINER:-oai-upf-e}
+      UPF_CN_N9_TARGET: ${UPF_CN_N9_TARGET:-}
+      EDGE_DN_LATENCY_TARGET: ${EDGE_DN_LATENCY_TARGET:-}
