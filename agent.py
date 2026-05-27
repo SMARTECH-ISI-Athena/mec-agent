@@ -22,6 +22,8 @@ DEFAULT_CONTAINER = 'oai-upf' if AGENT_ROLE == 'controller' else 'oai-upf-e'
 LOCAL_UPF_CONTAINER = os.environ.get('LOCAL_UPF_CONTAINER', DEFAULT_CONTAINER)
 N9_CIDR = os.environ.get('N9_CIDR', '172.32.0.0/24')
 N6_CIDR = os.environ.get('N6_CIDR', '172.33.0.0/24')
+N9_INTERFACE = os.environ.get('N9_INTERFACE', '').strip()
+N6_INTERFACE = os.environ.get('N6_INTERFACE', '').strip()
 UPF_CN_N9_TARGET = os.environ.get('UPF_CN_N9_TARGET', '').strip()
 CENTRAL_DN_LATENCY_TARGET = os.environ.get('CENTRAL_DN_LATENCY_TARGET', '').strip()
 EDGE_DN_LATENCY_TARGET = os.environ.get('EDGE_DN_LATENCY_TARGET', '').strip()
@@ -89,6 +91,33 @@ def interface_for_cidr(container, cidr):
     raise RuntimeError(f'No interface in {container} matches {cidr}')
 
 
+def interface_for_route(container, target):
+    if not target:
+        return None
+
+    cache_key = f'{container}:route:{target}'
+    if cache_key in cached_interfaces:
+        return cached_interfaces[cache_key]
+
+    output = docker_exec(container, f'ip route get {target}')
+    parts = output.split()
+    if 'dev' not in parts:
+        return None
+
+    interface_name = parts[parts.index('dev') + 1]
+    cached_interfaces[cache_key] = interface_name
+    return interface_name
+
+
+def ip_for_interface(container, interface_name):
+    output = docker_exec(container, f'ip -o -4 addr show dev {interface_name}')
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) >= 4:
+            return parts[3]
+    return None
+
+
 def ip_for_cidr(container, cidr):
     cache_key = f'{container}:{cidr}'
     if cache_key not in cached_ips:
@@ -105,8 +134,8 @@ def read_counter(container, interface_name, counter):
     return int(value)
 
 
-def read_link_mbps(key, container, cidr):
-    interface_name = interface_for_cidr(container, cidr)
+def read_link_mbps(key, container, cidr, interface_override=None, route_target=None):
+    interface_name = interface_override or interface_for_route(container, route_target) or interface_for_cidr(container, cidr)
     now = time.time()
     rx_bytes = read_counter(container, interface_name, 'rx_bytes')
     tx_bytes = read_counter(container, interface_name, 'tx_bytes')
@@ -120,6 +149,7 @@ def read_link_mbps(key, container, cidr):
     if not previous:
         return {
             'interface': interface_name,
+            'local-ip': ip_for_interface(container, interface_name),
             'rx': 0,
             'tx': 0
         }
@@ -130,6 +160,7 @@ def read_link_mbps(key, container, cidr):
 
     return {
         'interface': interface_name,
+        'local-ip': ip_for_interface(container, interface_name),
         'rx': round(rx_mbps, 2),
         'tx': round(tx_mbps, 2)
     }
@@ -210,7 +241,13 @@ def collect_traffic(mode):
     observed_links = []
 
     if AGENT_ROLE == 'controller':
-        cn_n6 = read_link_mbps(f'{NODE_NAME}-n6', LOCAL_UPF_CONTAINER, N6_CIDR)
+        cn_n6 = read_link_mbps(
+            f'{NODE_NAME}-n6',
+            LOCAL_UPF_CONTAINER,
+            N6_CIDR,
+            interface_override=N6_INTERFACE,
+            route_target=CENTRAL_DN_LATENCY_TARGET
+        )
         observed_links.append({
             'name': 'UPF-CN to CentralDN',
             'mode': 'Cloud (Chained)',
@@ -218,6 +255,7 @@ def collect_traffic(mode):
             'source': 'UPF-CN',
             'destination': 'CentralDN',
             'interface': f"N6 ({cn_n6['interface']})",
+            'local-ip': cn_n6['local-ip'],
             'rx': cn_n6['rx'],
             'tx': cn_n6['tx'],
             'latency-ms': ping_latency_ms(CENTRAL_DN_LATENCY_TARGET, container=LOCAL_UPF_CONTAINER),
@@ -225,8 +263,20 @@ def collect_traffic(mode):
         })
 
     if AGENT_ROLE == 'telemetry':
-        e_n9 = read_link_mbps(f'{NODE_NAME}-n9', LOCAL_UPF_CONTAINER, N9_CIDR)
-        e_n6 = read_link_mbps(f'{NODE_NAME}-n6', LOCAL_UPF_CONTAINER, N6_CIDR)
+        e_n9 = read_link_mbps(
+            f'{NODE_NAME}-n9',
+            LOCAL_UPF_CONTAINER,
+            N9_CIDR,
+            interface_override=N9_INTERFACE,
+            route_target=UPF_CN_N9_TARGET
+        )
+        e_n6 = read_link_mbps(
+            f'{NODE_NAME}-n6',
+            LOCAL_UPF_CONTAINER,
+            N6_CIDR,
+            interface_override=N6_INTERFACE,
+            route_target=EDGE_DN_LATENCY_TARGET
+        )
         observed_links.extend([
             {
                 'name': 'UPF-E to UPF-CN',
@@ -235,6 +285,7 @@ def collect_traffic(mode):
                 'source': 'UPF-E',
                 'destination': 'UPF-CN',
                 'interface': f"N9 ({e_n9['interface']})",
+                'local-ip': e_n9['local-ip'],
                 'rx': e_n9['rx'],
                 'tx': e_n9['tx'],
                 'latency-ms': ping_latency_ms(UPF_CN_N9_TARGET, container=LOCAL_UPF_CONTAINER),
@@ -247,6 +298,7 @@ def collect_traffic(mode):
                 'source': 'UPF-E',
                 'destination': 'EdgeDN',
                 'interface': f"N6 ({e_n6['interface']})",
+                'local-ip': e_n6['local-ip'],
                 'rx': e_n6['rx'],
                 'tx': e_n6['tx'],
                 'latency-ms': ping_latency_ms(EDGE_DN_LATENCY_TARGET, container=LOCAL_UPF_CONTAINER),
@@ -272,6 +324,7 @@ def fetch_traffic(mode):
             try:
                 return collect_traffic(mode)
             except Exception as exc:
+                print(f'Telemetry collection failed node={NODE_NAME} role={AGENT_ROLE}: {exc}', flush=True)
                 return {
                     'status': 'error',
                     'message': f'Failed to collect local traffic telemetry: {exc}'

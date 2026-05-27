@@ -15,10 +15,18 @@ hosts is required.
 
 ## Configure
 
-Run these commands from the `mec-agent` directory:
+Run the matching command from the `mec-agent` directory.
+
+On UPF-CN:
 
 ```sh
-cp .env.example .env
+cp .env.upf-cn.example .env
+```
+
+On UPF-E:
+
+```sh
+cp .env.upf-e.example .env
 ```
 
 Edit `.env` on each host and set the latency targets that exist in that
@@ -79,7 +87,16 @@ If `TRAFFIC_URL` is not set, the agent collects telemetry itself:
   - `UPF-E to EdgeDN`: byte counters from the local UPF-E container interface in `N6_CIDR`.
 
 The agent discovers the interface names by running `ip -o -4 addr show` inside
-the local UPF container and matching the configured CIDRs. It then reads:
+the local UPF container and matching the configured CIDRs. If a latency target
+is configured, it first tries `ip route get <target>` and uses the routed
+interface. If needed, force an interface explicitly:
+
+```env
+N9_INTERFACE=eth0
+N6_INTERFACE=eth1
+```
+
+It then reads:
 
 ```sh
 /sys/class/net/<interface>/statistics/rx_bytes
