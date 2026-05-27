@@ -24,7 +24,11 @@ N9_CIDR = os.environ.get('N9_CIDR', '172.32.0.0/24')
 N6_CIDR = os.environ.get('N6_CIDR', '172.33.0.0/24')
 N9_INTERFACE = os.environ.get('N9_INTERFACE', '').strip()
 N6_INTERFACE = os.environ.get('N6_INTERFACE', '').strip()
+COUNTER_BACKEND = os.environ.get('COUNTER_BACKEND', 'auto').strip().lower()
 UPF_CN_N9_TARGET = os.environ.get('UPF_CN_N9_TARGET', '').strip()
+UPF_E_N9_FILTER_CIDR = os.environ.get('UPF_E_N9_FILTER_CIDR', '').strip()
+EDGE_DN_FILTER_CIDR = os.environ.get('EDGE_DN_FILTER_CIDR', '').strip()
+CENTRAL_DN_FILTER_CIDR = os.environ.get('CENTRAL_DN_FILTER_CIDR', '').strip()
 CENTRAL_DN_LATENCY_TARGET = os.environ.get('CENTRAL_DN_LATENCY_TARGET', '').strip()
 EDGE_DN_LATENCY_TARGET = os.environ.get('EDGE_DN_LATENCY_TARGET', '').strip()
 LATENCY_PROBE_SCOPE = os.environ.get('LATENCY_PROBE_SCOPE', 'auto').strip().lower()
@@ -34,6 +38,7 @@ sample_counter = 0
 cached_interfaces = {}
 cached_ips = {}
 reported_probe_failures = set()
+installed_counter_rules = set()
 
 
 def request_json(url, method='GET', payload=None, timeout=10):
@@ -134,11 +139,92 @@ def read_counter(container, interface_name, counter):
     return int(value)
 
 
-def read_link_mbps(key, container, cidr, interface_override=None, route_target=None):
+def target_to_cidr(target):
+    if not target:
+        return ''
+    if '/' in target:
+        return target
+    try:
+        ip_address(target)
+        return f'{target}/32'
+    except ValueError:
+        return ''
+
+
+def counter_rule_comment(key, direction):
+    safe_key = re.sub(r'[^a-zA-Z0-9_.:-]', '_', key)
+    return f'mec-agent:{safe_key}:{direction}'
+
+
+def ensure_iptables_counter_rule(container, chain, interface_name, peer_cidr, direction, comment):
+    rule_key = f'{container}:{chain}:{interface_name}:{peer_cidr}:{direction}:{comment}'
+    if rule_key in installed_counter_rules:
+        return
+
+    peer_flag = '-s' if direction == 'rx' else '-d'
+    iface_flag = '-i' if direction == 'rx' else '-o'
+    check = (
+        f"iptables -t mangle -C {chain} {iface_flag} {interface_name} "
+        f"{peer_flag} {peer_cidr} -m comment --comment {comment!r}"
+    )
+    add = (
+        f"iptables -t mangle -I {chain} 1 {iface_flag} {interface_name} "
+        f"{peer_flag} {peer_cidr} -m comment --comment {comment!r}"
+    )
+
+    try:
+        docker_exec(container, check, timeout=5)
+    except Exception:
+        docker_exec(container, add, timeout=5)
+
+    installed_counter_rules.add(rule_key)
+
+
+def read_iptables_counter_bytes(container, comment):
+    output = docker_exec(container, 'iptables-save -t mangle -c', timeout=5)
+    for line in output.splitlines():
+        if f'--comment "{comment}"' not in line:
+            continue
+        match = re.match(r'\[(\d+):(\d+)\]', line)
+        if match:
+            return int(match.group(2))
+    return 0
+
+
+def read_filtered_counters(container, key, interface_name, peer_cidr):
+    rx_comment = counter_rule_comment(key, 'rx')
+    tx_comment = counter_rule_comment(key, 'tx')
+    ensure_iptables_counter_rule(container, 'PREROUTING', interface_name, peer_cidr, 'rx', rx_comment)
+    ensure_iptables_counter_rule(container, 'POSTROUTING', interface_name, peer_cidr, 'tx', tx_comment)
+    return {
+        'rx_bytes': read_iptables_counter_bytes(container, rx_comment),
+        'tx_bytes': read_iptables_counter_bytes(container, tx_comment)
+    }
+
+
+def read_link_mbps(key, container, cidr, interface_override=None, route_target=None, filter_cidr=None):
     interface_name = interface_override or interface_for_route(container, route_target) or interface_for_cidr(container, cidr)
     now = time.time()
-    rx_bytes = read_counter(container, interface_name, 'rx_bytes')
-    tx_bytes = read_counter(container, interface_name, 'tx_bytes')
+    backend = 'interface'
+    if filter_cidr and COUNTER_BACKEND in ('auto', 'iptables'):
+        try:
+            counters = read_filtered_counters(container, key, interface_name, filter_cidr)
+            rx_bytes = counters['rx_bytes']
+            tx_bytes = counters['tx_bytes']
+            backend = 'iptables-filter'
+        except Exception as exc:
+            if COUNTER_BACKEND == 'iptables':
+                raise
+            failure_key = f'iptables-counter:{container}:{key}:{interface_name}:{filter_cidr}:{exc}'
+            if failure_key not in reported_probe_failures:
+                reported_probe_failures.add(failure_key)
+                print(f'Filtered counter failed for {key}, falling back to interface counters: {exc}', flush=True)
+            rx_bytes = read_counter(container, interface_name, 'rx_bytes')
+            tx_bytes = read_counter(container, interface_name, 'tx_bytes')
+            backend = 'interface-fallback'
+    else:
+        rx_bytes = read_counter(container, interface_name, 'rx_bytes')
+        tx_bytes = read_counter(container, interface_name, 'tx_bytes')
     previous = previous_counters.get(key)
     previous_counters[key] = {
         'timestamp': now,
@@ -150,6 +236,8 @@ def read_link_mbps(key, container, cidr, interface_override=None, route_target=N
         return {
             'interface': interface_name,
             'local-ip': ip_for_interface(container, interface_name),
+            'counter-backend': backend,
+            'filter-cidr': filter_cidr,
             'rx': 0,
             'tx': 0
         }
@@ -161,6 +249,8 @@ def read_link_mbps(key, container, cidr, interface_override=None, route_target=N
     return {
         'interface': interface_name,
         'local-ip': ip_for_interface(container, interface_name),
+        'counter-backend': backend,
+        'filter-cidr': filter_cidr,
         'rx': round(rx_mbps, 2),
         'tx': round(tx_mbps, 2)
     }
@@ -239,6 +329,7 @@ def collect_traffic(mode):
     edge_active = mode == 'direct'
 
     observed_links = []
+    upf_e_n9_filter = UPF_E_N9_FILTER_CIDR or target_to_cidr(UPF_CN_N9_TARGET)
 
     if AGENT_ROLE == 'controller':
         cn_n6 = read_link_mbps(
@@ -246,7 +337,8 @@ def collect_traffic(mode):
             LOCAL_UPF_CONTAINER,
             N6_CIDR,
             interface_override=N6_INTERFACE,
-            route_target=CENTRAL_DN_LATENCY_TARGET
+            route_target=CENTRAL_DN_LATENCY_TARGET,
+            filter_cidr=CENTRAL_DN_FILTER_CIDR
         )
         observed_links.append({
             'name': 'UPF-CN to CentralDN',
@@ -256,6 +348,8 @@ def collect_traffic(mode):
             'destination': 'CentralDN',
             'interface': f"N6 ({cn_n6['interface']})",
             'local-ip': cn_n6['local-ip'],
+            'counter-backend': cn_n6['counter-backend'],
+            'filter-cidr': cn_n6['filter-cidr'],
             'rx': cn_n6['rx'],
             'tx': cn_n6['tx'],
             'latency-ms': ping_latency_ms(CENTRAL_DN_LATENCY_TARGET, container=LOCAL_UPF_CONTAINER),
@@ -268,14 +362,16 @@ def collect_traffic(mode):
             LOCAL_UPF_CONTAINER,
             N9_CIDR,
             interface_override=N9_INTERFACE,
-            route_target=UPF_CN_N9_TARGET
+            route_target=UPF_CN_N9_TARGET,
+            filter_cidr=upf_e_n9_filter
         )
         e_n6 = read_link_mbps(
             f'{NODE_NAME}-n6',
             LOCAL_UPF_CONTAINER,
             N6_CIDR,
             interface_override=N6_INTERFACE,
-            route_target=EDGE_DN_LATENCY_TARGET
+            route_target=EDGE_DN_LATENCY_TARGET,
+            filter_cidr=EDGE_DN_FILTER_CIDR
         )
         observed_links.extend([
             {
@@ -286,6 +382,8 @@ def collect_traffic(mode):
                 'destination': 'UPF-CN',
                 'interface': f"N9 ({e_n9['interface']})",
                 'local-ip': e_n9['local-ip'],
+                'counter-backend': e_n9['counter-backend'],
+                'filter-cidr': e_n9['filter-cidr'],
                 'rx': e_n9['rx'],
                 'tx': e_n9['tx'],
                 'latency-ms': ping_latency_ms(UPF_CN_N9_TARGET, container=LOCAL_UPF_CONTAINER),
@@ -299,6 +397,8 @@ def collect_traffic(mode):
                 'destination': 'EdgeDN',
                 'interface': f"N6 ({e_n6['interface']})",
                 'local-ip': e_n6['local-ip'],
+                'counter-backend': e_n6['counter-backend'],
+                'filter-cidr': e_n6['filter-cidr'],
                 'rx': e_n6['rx'],
                 'tx': e_n6['tx'],
                 'latency-ms': ping_latency_ms(EDGE_DN_LATENCY_TARGET, container=LOCAL_UPF_CONTAINER),

@@ -46,8 +46,12 @@ UPF-E `oai-upf-e`:
 
 ```env
 N9_CIDR=172.32.1.0/24
-N6_CIDR=172.31.1.0/24
+N6_CIDR=172.32.1.0/24
+N9_INTERFACE=eth0
+N6_INTERFACE=eth0
 UPF_CN_N9_TARGET=172.32.0.134
+UPF_E_N9_FILTER_CIDR=172.32.0.134/32
+EDGE_DN_FILTER_CIDR=172.33.0.0/24
 ```
 
 ## Run on UPF-CN
@@ -94,6 +98,31 @@ interface. If needed, force an interface explicitly:
 ```env
 N9_INTERFACE=eth0
 N6_INTERFACE=eth1
+```
+
+In the current UPF-E topology, N9 and local edge breakout are multiplexed on
+the same interface:
+
+```text
+oai-upf-e eth0 = N9 + EdgeDN breakout side
+oai-upf-e eth1 = N3/access/gNB side
+```
+
+Because of that, interface-wide byte counters cannot distinguish `UPF-E to
+UPF-CN` from `UPF-E to EdgeDN`. The agent uses filtered iptables counters when
+filter CIDRs are configured:
+
+```env
+COUNTER_BACKEND=auto
+UPF_E_N9_FILTER_CIDR=172.32.0.134/32
+EDGE_DN_FILTER_CIDR=172.33.0.0/24
+```
+
+If the test service is reached through a different address, set
+`EDGE_DN_FILTER_CIDR` to that address or subnet, for example:
+
+```env
+EDGE_DN_FILTER_CIDR=192.168.11.237/32
 ```
 
 It then reads:
