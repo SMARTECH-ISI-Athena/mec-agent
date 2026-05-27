@@ -25,6 +25,23 @@ Edit `.env` on each host and set the latency targets that exist in that
 environment. If the portal backend sets `MEC_AGENT_TOKEN`, use the same value
 as `AGENT_TOKEN`.
 
+With the interfaces currently observed in the OAI UPF containers:
+
+UPF-CN `oai-upf`:
+
+```env
+N9_CIDR=172.32.0.0/24
+N6_CIDR=172.31.0.0/24
+```
+
+UPF-E `oai-upf-e`:
+
+```env
+N9_CIDR=172.32.1.0/24
+N6_CIDR=172.31.1.0/24
+UPF_CN_N9_TARGET=172.32.0.134
+```
+
 ## Run on UPF-CN
 
 ```sh
@@ -79,9 +96,10 @@ For latency, configure real probe targets on the relevant host:
 -e EDGE_DN_LATENCY_TARGET=<edge-dn-or-edge-app-ip>
 ```
 
-The latency values are active probes, not UPF counters. The UPF-E agent should
-measure `UPF-E to UPF-CN` latency by pinging `UPF_CN_N9_TARGET` from inside the
-local `oai-upf-e` container.
+The latency values are active probes, not UPF counters. By default
+`LATENCY_PROBE_SCOPE=auto`: the agent first tries to ping from inside the UPF
+container and falls back to pinging from the agent container. This matters
+because the current OAI UPF containers do not always include `ping`.
 
 The container needs access to the local Docker socket to run `docker exec` on
 the local UPF container.

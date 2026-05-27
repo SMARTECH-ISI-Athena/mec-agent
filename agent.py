@@ -25,6 +25,7 @@ N6_CIDR = os.environ.get('N6_CIDR', '172.33.0.0/24')
 UPF_CN_N9_TARGET = os.environ.get('UPF_CN_N9_TARGET', '').strip()
 CENTRAL_DN_LATENCY_TARGET = os.environ.get('CENTRAL_DN_LATENCY_TARGET', '').strip()
 EDGE_DN_LATENCY_TARGET = os.environ.get('EDGE_DN_LATENCY_TARGET', '').strip()
+LATENCY_PROBE_SCOPE = os.environ.get('LATENCY_PROBE_SCOPE', 'auto').strip().lower()
 
 previous_counters = {}
 sample_counter = 0
@@ -133,21 +134,39 @@ def read_link_mbps(key, container, cidr):
     }
 
 
+def parse_ping_latency(output):
+    match = re.search(r'(?:rtt|round-trip).* = [^/]+/([^/]+)/', output)
+    if not match:
+        return None
+    return round(float(match.group(1)), 2)
+
+
 def ping_latency_ms(target, container=None):
     if not target:
         return None
 
     command = f'ping -c 3 -W 1 {target}'
-    try:
-        output = docker_exec(container, command, timeout=6) if container else run_command(command.split(), timeout=6)
-    except Exception as exc:
-        print(f'Latency probe failed for {target}: {exc}', flush=True)
+
+    if LATENCY_PROBE_SCOPE in ('container', 'auto') and container:
+        try:
+            return parse_ping_latency(docker_exec(container, command, timeout=6))
+        except Exception as exc:
+            print(f'Container latency probe failed for {target}: {exc}', flush=True)
+            if LATENCY_PROBE_SCOPE == 'container':
+                return None
+
+    if LATENCY_PROBE_SCOPE in ('agent', 'auto'):
+        try:
+            return parse_ping_latency(run_command(command.split(), timeout=6))
+        except Exception as exc:
+            print(f'Agent latency probe failed for {target}: {exc}', flush=True)
+            return None
+
+    if LATENCY_PROBE_SCOPE not in ('container', 'agent', 'auto'):
+        print(f'Unsupported LATENCY_PROBE_SCOPE={LATENCY_PROBE_SCOPE}', flush=True)
         return None
 
-    match = re.search(r'(?:rtt|round-trip).* = [^/]+/([^/]+)/', output)
-    if not match:
-        return None
-    return round(float(match.group(1)), 2)
+    return None
 
 
 def post_controller(path):
