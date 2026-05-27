@@ -31,6 +31,7 @@ previous_counters = {}
 sample_counter = 0
 cached_interfaces = {}
 cached_ips = {}
+reported_probe_failures = set()
 
 
 def request_json(url, method='GET', payload=None, timeout=10):
@@ -151,7 +152,10 @@ def ping_latency_ms(target, container=None):
         try:
             return parse_ping_latency(docker_exec(container, command, timeout=6))
         except Exception as exc:
-            print(f'Container latency probe failed for {target}: {exc}', flush=True)
+            failure_key = f'container:{container}:{target}:{exc}'
+            if failure_key not in reported_probe_failures:
+                reported_probe_failures.add(failure_key)
+                print(f'Container latency probe failed for {target}: {exc}', flush=True)
             if LATENCY_PROBE_SCOPE == 'container':
                 return None
 
@@ -159,7 +163,10 @@ def ping_latency_ms(target, container=None):
         try:
             return parse_ping_latency(run_command(command.split(), timeout=6))
         except Exception as exc:
-            print(f'Agent latency probe failed for {target}: {exc}', flush=True)
+            failure_key = f'agent:{target}:{exc}'
+            if failure_key not in reported_probe_failures:
+                reported_probe_failures.add(failure_key)
+                print(f'Agent latency probe failed for {target}: {exc}', flush=True)
             return None
 
     if LATENCY_PROBE_SCOPE not in ('container', 'agent', 'auto'):
@@ -349,8 +356,8 @@ def run():
                 report(mode, revision, 'success', response=controller_response, traffic=traffic)
                 last_applied_revision = revision
             else:
-                traffic = fetch_traffic(mode)
-                if traffic is not None and mode in ('direct', 'chain'):
+                traffic = fetch_traffic(mode) if mode in ('direct', 'chain') else None
+                if traffic is not None:
                     report(mode, revision, 'success', traffic=traffic)
 
         except urllib.error.HTTPError as exc:
