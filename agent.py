@@ -293,7 +293,14 @@ def report(mode, revision, status, response=None, traffic=None):
     if traffic is not None:
         payload['traffic'] = traffic
 
-    return request_json(f'{PORTAL_BASE_URL}/mec/agent/report', method='POST', payload=payload)
+    result = request_json(f'{PORTAL_BASE_URL}/mec/agent/report', method='POST', payload=payload)
+    link_count = len((traffic or {}).get('observed-links') or [])
+    print(
+        f'Reported node={NODE_NAME} role={AGENT_ROLE} mode={mode} '
+        f'revision={revision} status={status} links={link_count}',
+        flush=True
+    )
+    return result
 
 
 def apply_mode(mode):
@@ -311,13 +318,28 @@ def run():
         raise RuntimeError('AGENT_ROLE must be controller or telemetry')
 
     last_applied_revision = None
+    loop_count = 0
+
+    print(
+        f'Starting MEC agent node={NODE_NAME} role={AGENT_ROLE} '
+        f'container={LOCAL_UPF_CONTAINER} portal={PORTAL_BASE_URL}',
+        flush=True
+    )
 
     while True:
         try:
+            loop_count += 1
             desired = request_json(f'{PORTAL_BASE_URL}/mec/agent/desired')
             mode = desired.get('desiredMode')
             revision = desired.get('revision')
             pending = desired.get('pending')
+
+            if loop_count == 1 or loop_count % 30 == 0:
+                print(
+                    f'Polling ok node={NODE_NAME} role={AGENT_ROLE} '
+                    f'desiredMode={mode} revision={revision} pending={pending}',
+                    flush=True
+                )
 
             should_apply = AGENT_ROLE == 'controller' and pending and mode in ('direct', 'chain')
             if should_apply and revision != last_applied_revision:
