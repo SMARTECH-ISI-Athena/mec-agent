@@ -151,9 +151,10 @@ def target_to_cidr(target):
         return ''
 
 
-def counter_rule_comment(key, direction):
+def counter_rule_comment(key, direction, filter_cidr):
     safe_key = re.sub(r'[^a-zA-Z0-9_.:-]', '_', key)
-    return f'mec-agent:{safe_key}:{direction}'
+    safe_filter = re.sub(r'[^a-zA-Z0-9_.:-]', '_', filter_cidr)
+    return f'mec-agent:{safe_key}:{safe_filter}:{direction}'
 
 
 def ensure_iptables_counter_rule(container, chain, interface_name, peer_cidr, direction, comment):
@@ -192,8 +193,8 @@ def read_iptables_counter_bytes(container, comment):
 
 
 def read_filtered_counters(container, key, interface_name, peer_cidr):
-    rx_comment = counter_rule_comment(key, 'rx')
-    tx_comment = counter_rule_comment(key, 'tx')
+    rx_comment = counter_rule_comment(key, 'rx', peer_cidr)
+    tx_comment = counter_rule_comment(key, 'tx', peer_cidr)
     ensure_iptables_counter_rule(container, 'PREROUTING', interface_name, peer_cidr, 'rx', rx_comment)
     ensure_iptables_counter_rule(container, 'POSTROUTING', interface_name, peer_cidr, 'tx', tx_comment)
     return {
