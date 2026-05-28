@@ -76,3 +76,30 @@ services:
       LOCAL_UPF_CONTAINER: ${LOCAL_UPF_CONTAINER:-oai-upf-e}
       UPF_CN_N9_TARGET: ${UPF_CN_N9_TARGET:-}
       EDGE_DN_LATENCY_TARGET: ${EDGE_DN_LATENCY_TARGET:-}
+
+  mec-validation-probe:
+    build: .
+    image: mec-breakout-agent:latest
+    container_name: mec-validation-probe
+    profiles:
+      - validation
+    restart: unless-stopped
+    network_mode: "container:${VALIDATION_UPF_CONTAINER:-oai-upf-e}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: ["python", "/agent/validation_probe.py"]
+    environment:
+      PORTAL_BASE_URL: ${PORTAL_BASE_URL:-https://back-6gbricks.dedyn.io}
+      AGENT_TOKEN: ${AGENT_TOKEN:-}
+      VALIDATION_ROLE: ${VALIDATION_ROLE:-upf-e}
+      VALIDATION_UPF_CONTAINER: ${VALIDATION_UPF_CONTAINER:-oai-upf-e}
+      VALIDATION_DIRECT_TARGET: ${VALIDATION_DIRECT_TARGET:-172.33.0.100}
+      VALIDATION_CHAIN_TARGET: ${VALIDATION_CHAIN_TARGET:-172.32.0.134}
+      VALIDATION_CENTRAL_TARGET: ${VALIDATION_CENTRAL_TARGET:-192.168.11.237}
+      VALIDATION_PACKET_SIZE: ${VALIDATION_PACKET_SIZE:-1400}
+      VALIDATION_INTERVAL_SECONDS: ${VALIDATION_INTERVAL_SECONDS:-0.01}
+      VALIDATION_POLL_SECONDS: ${VALIDATION_POLL_SECONDS:-2}
+      VALIDATION_N6_CONFIG_SECTION: ${VALIDATION_N6_CONFIG_SECTION:-n6}
+      VALIDATION_N9_CONFIG_SECTION: ${VALIDATION_N9_CONFIG_SECTION:-n9}
+      VALIDATION_EXPECTED_N6_INTERFACE: ${VALIDATION_EXPECTED_N6_INTERFACE:-eth0}
+      VALIDATION_EXPECTED_N9_INTERFACE: ${VALIDATION_EXPECTED_N9_INTERFACE:-eth0}

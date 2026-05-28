@@ -5,6 +5,7 @@ WORKDIR /agent
 RUN apk add --no-cache docker-cli iputils
 
 COPY agent.py /agent/agent.py
+COPY validation_probe.py /agent/validation_probe.py
 
 ENV FLOW_CONTROLLER_URL=http://192.168.0.1:9090
 ENV FLOW_DIRECT_PATH=/flow/all/direct
