@@ -1,7 +1,7 @@
 # MEC Breakout Agent
 
 This agent is used when the private UPF flow controller cannot be reached
-directly by the 6G-Bricks Portal backend.
+directly by the Portal backend.
 
 The portal stores the desired flow mode. The agents poll the portal through
 outbound HTTPS:
@@ -22,7 +22,7 @@ Required on each host:
 
 - Docker
 - Docker Compose plugin
-- Outbound HTTPS access to `https://back-6gbricks.dedyn.io`
+- Outbound HTTPS access to portal
 - Access to the local Docker socket, because the agent reads counters from the
   local OAI UPF container with `docker exec`
 
@@ -36,8 +36,8 @@ Expected local UPF container names:
 Clone the repository on each host and enter the agent directory.
 
 ```sh
-git clone -b mec-breakout-dashboard https://github.com/SMARTECH-ISI-Athena/6G-BRICKS-Portal.git
-cd 6G-BRICKS-Portal/mec-agent
+git clone -b mec-breakout-dashboard https://github.com/SMARTECH-ISI-Athena/mec-agent.git
+cd mec-agent
 ```
 
 If the agent is later split into its own repository, clone that repository
@@ -140,7 +140,7 @@ docker compose logs -f mec-agent-edge
 Expected startup log:
 
 ```text
-Starting MEC agent node=upf-e role=telemetry container=oai-upf-e portal=https://back-6gbricks.dedyn.io
+Starting MEC agent node=upf-e role=telemetry container=oai-upf-e portal=[portal_url]
 ```
 
 ## Interface Detection
